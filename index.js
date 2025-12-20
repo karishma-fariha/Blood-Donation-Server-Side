@@ -8,7 +8,7 @@ app.use(cors());
 app.use(express.json())
 
 
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@hero.3n4q6b5.mongodb.net/?appName=Hero`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -103,6 +103,31 @@ async function run() {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await donationCollection.findOne(query);
+      res.send(result);
+    });
+
+
+    // Update the donation request
+    app.patch("/update-donation-request/:id", async (req, res) => {
+      const id = req.params.id;
+      const updatedData = req.body;
+      const filter = { _id: new ObjectId(id) };
+
+      const updateDoc = {
+        $set: {
+          recipientName: updatedData.recipientName,
+          recipientDistrict: updatedData.recipientDistrict,
+          recipientUpazila: updatedData.recipientUpazila,
+          hospitalName: updatedData.hospitalName,
+          fullAddress: updatedData.fullAddress,
+          bloodGroup: updatedData.bloodGroup,
+          donationDate: updatedData.donationDate,
+          donationTime: updatedData.donationTime,
+          requestMessage: updatedData.requestMessage,
+        },
+      };
+
+      const result = await donationCollection.updateOne(filter, updateDoc);
       res.send(result);
     });
 
