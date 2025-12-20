@@ -43,7 +43,7 @@ async function run() {
       res.send(result)
     })
 
-    // donation requests
+    //create donation requests
     app.post("/donation-requests",async(req,res)=>{
       const requestData = req.body;
       const user = await userCollection.findOne({email:requestData.requesterEmail})
@@ -57,7 +57,21 @@ async function run() {
     };
       const result = await donationCollection.insertOne(newRequest);
       res.send(result)
-    })
+    })  
+
+// get a single donation request
+    app.get("/donation-requests/recent/:email", async (req, res) => {
+    const email = req.params.email;
+    const query = { requesterEmail: email };
+    
+    
+    const result = await donationCollection.find(query)
+        .sort({ createdAt: -1 })
+        .limit(3)
+        .toArray();
+        
+    res.send(result);
+});
 
     // get a single user
     app.get('/users/:email', async (req, res) => {
