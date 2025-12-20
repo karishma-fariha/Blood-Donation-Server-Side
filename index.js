@@ -29,6 +29,7 @@ async function run() {
 
     const database = client.db('blooddonationdb')
     const userCollection = database.collection('user')
+    const donationCollection = database.collection('donationRequests');
 
 
 
@@ -39,6 +40,22 @@ async function run() {
       userInfo.createdAt = new Date();
 
       const result = await userCollection.insertOne(userInfo);
+      res.send(result)
+    })
+
+    // donation requests
+    app.post("/donation-requests",async(req,res)=>{
+      const requestData = req.body;
+      const user = await userCollection.findOne({email:requestData.requesterEmail})
+      if (user?.status === 'blocked') {
+        return res.status(403).send({ message: "Blocked users cannot create requests." });
+    }
+    const newRequest = {
+        ...requestData,
+        status: "pending",
+        createdAt: new Date()
+    };
+      const result = await donationCollection.insertOne(newRequest);
       res.send(result)
     })
 
