@@ -20,37 +20,92 @@ const client = new MongoClient(uri, {
   }
 });
 
+
+
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
     // await client.connect();
-    // Send a ping to confirm a successful connection
 
     const database = client.db('blooddonationdb')
     const userCollection = database.collection('user')
 
 
-    app.post('/users',async(req,res)=>{
-        const userInfo = req.body; 
-        userInfo.role ="Donor";
-        userInfo.createdAt = new Date();
 
-        const result = await userCollection.insertOne(userInfo);
-        res.send(result)
+    // create user
+    app.post('/users', async (req, res) => {
+      const userInfo = req.body;
+      userInfo.role = "Donor";
+      userInfo.createdAt = new Date();
+
+      const result = await userCollection.insertOne(userInfo);
+      res.send(result)
     })
+
+    // get a single user
+    app.get('/users/:email', async (req, res) => {
+      try {
+        const email = req.params.email;
+
+
+        if (!userCollection) {
+          return res.status(500).send({ message: "Database not initialized" });
+        }
+
+        const query = { email: email };
+        const result = await userCollection.findOne(query);
+        if (!result) {
+          return res.status(404).send({ message: "User not found in database" });
+        }
+
+        res.send(result);
+      } catch (error) {
+        console.error("Backend Error at /users/:email :", error);
+        res.status(500).send({ message: "Internal Server Error", error: error.message });
+      }
+    });
+
+    app.patch('/users/:email', async (req, res) => {
+      const email = req.params.email;
+      const updatedData = req.body;
+      delete updatedData.email;
+
+      const query = { email: email };
+      const updateDoc = {
+        $set: {
+          name: updatedData.name,
+          avatar: updatedData.avatar,
+          bloodGroup: updatedData.bloodGroup,
+          district: updatedData.district,
+          upazila: updatedData.upazila,
+        },
+      };
+
+      try {
+        const result = await userCollection.updateOne(query, updateDoc);
+        if (result.matchedCount === 0) {
+          return res.status(404).send({ message: "User not found" });
+        }
+        res.send(result);
+      } catch (error) {
+        console.error("Database Error:", error);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
-   
-    
+
+
   }
 }
 run().catch(console.dir);
 
 
-app.get('/',(req,res)=>{
-    res.send("Hello,its Blood Donation app")
+app.get('/', (req, res) => {
+  res.send("Hello,its Blood Donation app")
 });
-app.listen(port,()=>{
-    console.log(`Server is running on ${port}`)
+app.listen(port, () => {
+  console.log(`Server is running on ${port}`)
 });
