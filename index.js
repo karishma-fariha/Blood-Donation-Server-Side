@@ -131,6 +131,24 @@ async function run() {
       res.send(result);
     });
 
+    // Change status to inprogress
+    app.patch("/donation-requests/donate/:id", async (req, res) => {
+      const id = req.params.id;
+      const { donorName, donorEmail } = req.body;
+      const filter = { _id: new ObjectId(id) };
+
+      const updateDoc = {
+        $set: {
+          donorName: donorName,
+          donorEmail: donorEmail,
+          status: "inprogress",
+        },
+      };
+
+      const result = await donationCollection.updateOne(filter, updateDoc);
+      res.send(result);
+    });
+
     // get a single user
     app.get('/users/:email', async (req, res) => {
       try {
@@ -180,6 +198,40 @@ async function run() {
         console.error("Database Error:", error);
         res.status(500).send({ message: "Internal server error" });
       }
+    });
+
+
+    // admin apis
+
+    //Get all users (with optional status filter)
+    app.get("/users", async (req, res) => {
+      const status = req.query.status;
+      let query = {};
+      if (status && status !== 'all') {
+        query.status = status;
+      }
+      const result = await userCollection.find(query).toArray();
+      res.send(result);
+    });
+
+    //Change User Role (Admin/Volunteer/Donor)
+    app.patch("/users/role/:id", async (req, res) => {
+      const id = req.params.id;
+      const { role } = req.body;
+      const filter = { _id: new ObjectId(id) };
+      const updateDoc = { $set: { role: role } };
+      const result = await userCollection.updateOne(filter, updateDoc);
+      res.send(result);
+    });
+
+    //Change User Status (active/blocked)
+    app.patch("/users/status/:id", async (req, res) => {
+      const id = req.params.id;
+      const { status } = req.body;
+      const filter = { _id: new ObjectId(id) };
+      const updateDoc = { $set: { status: status } };
+      const result = await userCollection.updateOne(filter, updateDoc);
+      res.send(result);
     });
 
     await client.db("admin").command({ ping: 1 });
