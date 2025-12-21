@@ -234,6 +234,37 @@ async function run() {
       res.send(result);
     });
 
+
+    // Check if a user is an admin
+    app.get('/users/admin/:email', async (req, res) => {
+      const email = req.params.email;
+      const user = await userCollection.findOne({ email: email });
+      let admin = false;
+      if (user) {
+        admin = user?.role === 'admin';
+      }
+      res.send({ admin });
+    });
+    // search functionality
+    app.get("/donor-search", async (req, res) => {
+      try {
+        const { bloodGroup, district, upazila } = req.query;
+        let query = {
+          role: "donor",   
+          status: "active" 
+        };
+
+       if (bloodGroup && bloodGroup !== "") query.bloodGroup = bloodGroup;
+    if (district && district !== "") query.district = district;
+    if (upazila && upazila !== "") query.upazila = upazila;
+
+        const result = await userCollection.find(query).toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Search failed" });
+      }
+    });
+
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
