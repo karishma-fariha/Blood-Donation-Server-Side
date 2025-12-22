@@ -60,7 +60,7 @@ async function run() {
     const userCollection = database.collection('user')
     const donationCollection = database.collection('donationRequests');
     const blogCollection = database.collection("blogs")
-
+    const fundingCollection = database.collection("funding")
 
     // create user
     app.post('/users', async (req, res) => {
@@ -182,7 +182,7 @@ async function run() {
     // Update Donation Status (Done, Canceled, In-progress, etc.)
     app.patch('/donation-requests/status/:id', verifyToken, async (req, res) => {
       const id = req.params.id;
-      const { status } = req.body; 
+      const { status } = req.body;
 
       const filter = { _id: new ObjectId(id) };
 
@@ -368,7 +368,6 @@ async function run() {
       const totalRequests = await donationCollection.countDocuments();
       const successfulDonations = await donationCollection.countDocuments({ status: 'done' });
       const pendingRequests = await donationCollection.countDocuments({ status: 'pending' });
-
       res.send({
         totalUsers,
         totalRequests,
@@ -377,29 +376,86 @@ async function run() {
       });
     });
 
-    
-// Create a new blog post
-app.post('/blogs', verifyToken, async (req, res) => {
-    const blogData = req.body;
-    
-    const newBlog = {
-        ...blogData,
-        status: 'draft', 
-        createdAt: new Date()
-    };
 
-    try {
+    // Create a new blog post
+    app.post('/blogs', verifyToken, async (req, res) => {
+      const blogData = req.body;
+
+      const newBlog = {
+        ...blogData,
+        status: 'draft',
+        createdAt: new Date()
+      };
+
+      try {
         const result = await blogCollection.insertOne(newBlog);
         res.send(result);
-    } catch (error) {
+      } catch (error) {
         res.status(500).send({ message: "Failed to create blog" });
-    }
-});
+      }
+    });
 
     // Protected route for Admin/Volunteer
     app.get("/all-blogs", verifyToken, verifyVolunteer, async (req, res) => {
       const result = await blogCollection.find().toArray();
       res.send(result);
+    });
+
+
+    const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
+    // 1. Create Payment Intent
+    app.post('/create-payment-intent', verifyToken, async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100); // Stripe works in cents
+
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amount,
+        currency: 'usd',
+        payment_method_types: ['card']
+      });
+
+      res.send({ clientSecret: paymentIntent.client_secret });
+    });
+
+    // 2. Save Funding Info
+    app.post('/fundings', verifyToken, async (req, res) => {
+      const funding = req.body;
+      const result = await fundingCollection.insertOne(funding);
+      res.send(result);
+    });
+
+    // 3. Get All Funding (For the table)
+    app.get('/fundings', verifyToken, async (req, res) => {
+      const result = await fundingCollection.find().toArray();
+      res.send(result);
+    });
+
+
+    // server/index.js
+
+    app.get('/admin-stats', verifyToken, verifyAdmin, async (req, res) => {
+      const payments = await fundingCollection.aggregate([
+        {
+          $group: {
+            _id: null,
+            totalRevenue: { $sum: '$amount' }
+          }
+        }
+      ]).toArray();
+
+      const totalRevenue = payments.length > 0 ? payments[0].totalRevenue : 0;
+
+      const users = await userCollection.estimatedDocumentCount();
+      const donationRequests = await donationCollection.estimatedDocumentCount();
+      const blogCount = await blogCollection.estimatedDocumentCount();
+
+      res.send({
+        totalRevenue,
+        users,
+        donationRequests,
+        blogCount
+      });
     });
 
     await client.db("admin").command({ ping: 1 });
