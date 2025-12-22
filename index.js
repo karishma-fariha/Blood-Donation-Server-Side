@@ -1,3 +1,4 @@
+const jwt = require('jsonwebtoken');
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
@@ -6,6 +7,32 @@ const port = process.env.PORT || 3000;
 const app = express();
 app.use(cors());
 app.use(express.json())
+
+
+app.post('/jwt', async (req, res) => {
+  const user = req.body; // Usually { email: 'user@example.com' }
+  const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' });
+  res.send({ token });
+});
+
+// Middleware to verify JWT Token
+const verifyToken = (req, res, next) => {
+  if (!req.headers.authorization) {
+    return res.status(401).send({ message: 'unauthorized access' });
+  }
+
+  const token = req.headers.authorization.split(' ')[1];
+
+  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(401).send({ message: 'unauthorized access' });
+    }
+
+    req.decoded = decoded;
+
+    next();
+  });
+};
 
 
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
@@ -22,6 +49,8 @@ const client = new MongoClient(uri, {
 
 
 
+
+
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
@@ -30,7 +59,7 @@ async function run() {
     const database = client.db('blooddonationdb')
     const userCollection = database.collection('user')
     const donationCollection = database.collection('donationRequests');
-
+    const blogCollection = database.collection("blogs")
 
 
     // create user
@@ -149,6 +178,33 @@ async function run() {
       res.send(result);
     });
 
+
+    // Update Donation Status (Done, Canceled, In-progress, etc.)
+    app.patch('/donation-requests/status/:id', verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const { status } = req.body; 
+
+      const filter = { _id: new ObjectId(id) };
+
+      const updatedDoc = {
+        $set: {
+          status: status
+        },
+      };
+
+      try {
+        const result = await donationCollection.updateOne(filter, updatedDoc);
+        if (result.modifiedCount > 0) {
+          res.send(result);
+        } else {
+          res.status(404).send({ message: "No changes made or request not found" });
+        }
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
     // get a single user
     app.get('/users/:email', async (req, res) => {
       try {
@@ -203,6 +259,35 @@ async function run() {
 
     // admin apis
 
+    //  middle ware before allowing admin activity
+    const verifyAdmin = async (req, res, next) => {
+
+      const email = req.decoded.email;
+
+      const query = { email: email };
+      const user = await userCollection.findOne(query);
+
+      const isAdmin = user?.role === 'admin';
+
+      if (!isAdmin) {
+        return res.status(403).send({ message: 'forbidden access' });
+      }
+
+      next();
+    };
+
+
+    // The verifyVolunteer Middleware
+    const verifyVolunteer = async (req, res, next) => {
+      const email = req.decoded.email;
+      const user = await userCollection.findOne({ email });
+      if (user?.role === 'admin' || user?.role === 'volunteer') {
+        next();
+      } else {
+        return res.status(403).send({ message: 'forbidden access' });
+      }
+    };
+
     //Get all users (with optional status filter)
     app.get("/users", async (req, res) => {
       const status = req.query.status;
@@ -215,7 +300,7 @@ async function run() {
     });
 
     //Change User Role (Admin/Volunteer/Donor)
-    app.patch("/users/role/:id", async (req, res) => {
+    app.patch("/users/role/:id", verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const { role } = req.body;
       const filter = { _id: new ObjectId(id) };
@@ -225,7 +310,7 @@ async function run() {
     });
 
     //Change User Status (active/blocked)
-    app.patch("/users/status/:id", async (req, res) => {
+    app.patch("/users/status/:id", verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const { status } = req.body;
       const filter = { _id: new ObjectId(id) };
@@ -236,7 +321,7 @@ async function run() {
 
 
     // Check if a user is an admin
-    app.get('/users/admin/:email', async (req, res) => {
+    app.get('/users/admin/:email', verifyToken, verifyAdmin, async (req, res) => {
       const email = req.params.email;
       const user = await userCollection.findOne({ email: email });
       let admin = false;
@@ -250,19 +335,71 @@ async function run() {
       try {
         const { bloodGroup, district, upazila } = req.query;
         let query = {
-          role: "donor",   
-          status: "active" 
+          role: "donor",
+          status: "active"
         };
 
-       if (bloodGroup && bloodGroup !== "") query.bloodGroup = bloodGroup;
-    if (district && district !== "") query.district = district;
-    if (upazila && upazila !== "") query.upazila = upazila;
+        if (bloodGroup && bloodGroup !== "") query.bloodGroup = bloodGroup;
+        if (district && district !== "") query.district = district;
+        if (upazila && upazila !== "") query.upazila = upazila;
 
         const result = await userCollection.find(query).toArray();
         res.send(result);
       } catch (error) {
         res.status(500).send({ message: "Search failed" });
       }
+    });
+
+
+    app.get("/all-pending-requests", verifyToken, async (req, res) => {
+      try {
+        const query = { status: 'pending' };
+        const result = await donationCollection.find(query).toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+
+    });
+
+
+    app.get("/admin-stats", verifyToken, verifyAdmin, async (req, res) => {
+      const totalUsers = await userCollection.countDocuments();
+      const totalRequests = await donationCollection.countDocuments();
+      const successfulDonations = await donationCollection.countDocuments({ status: 'done' });
+      const pendingRequests = await donationCollection.countDocuments({ status: 'pending' });
+
+      res.send({
+        totalUsers,
+        totalRequests,
+        successfulDonations,
+        pendingRequests
+      });
+    });
+
+    
+// Create a new blog post
+app.post('/blogs', verifyToken, async (req, res) => {
+    const blogData = req.body;
+    
+    const newBlog = {
+        ...blogData,
+        status: 'draft', 
+        createdAt: new Date()
+    };
+
+    try {
+        const result = await blogCollection.insertOne(newBlog);
+        res.send(result);
+    } catch (error) {
+        res.status(500).send({ message: "Failed to create blog" });
+    }
+});
+
+    // Protected route for Admin/Volunteer
+    app.get("/all-blogs", verifyToken, verifyVolunteer, async (req, res) => {
+      const result = await blogCollection.find().toArray();
+      res.send(result);
     });
 
     await client.db("admin").command({ ping: 1 });
