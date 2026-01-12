@@ -351,17 +351,94 @@ async function run() {
     });
 
 
-    app.get("/all-pending-requests", verifyToken, async (req, res) => {
+    // Updated route to include both pending and in-progress missions
+    app.get("/all-active-operations", verifyToken, async (req, res) => {
       try {
-        const query = { status: 'pending' };
-        const result = await donationCollection.find(query).toArray();
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ message: "Internal Server Error" });
-      }
+        const page = parseInt(req.query.page) || 0;
+        const size = parseInt(req.query.size) || 6;
+        const bloodGroup = req.query.bloodGroup;
 
+        // Base Filter: Active missions only
+        let query = {
+          status: { $in: ['pending', 'inprogress'] }
+        };
+
+        // Add Blood Group filter only if the user selected one
+        if (bloodGroup && bloodGroup !== "") {
+          query.bloodGroup = bloodGroup;
+        }
+
+        // Fetch data and count total matches
+        const [result, count] = await Promise.all([
+          donationCollection.find(query)
+            .sort({ createdAt: -1 })
+            .skip(page * size)
+            .limit(size)
+            .toArray(),
+          donationCollection.countDocuments(query)
+        ]);
+
+        res.send({ result, count });
+      } catch (error) {
+        console.error("Backend_Filter_Error:", error);
+        res.status(500).send({ message: "Internal Server Error", result: [], count: 0 });
+      }
     });
 
+
+    app.get("/system-statistics", verifyToken, async (req, res) => {
+      try {
+        const totalMissions = await donationCollection.countDocuments();
+        const activeMissions = await donationCollection.countDocuments({
+          status: { $in: ['pending', 'inprogress'] }
+        });
+        const totalUsers = await userCollection.countDocuments();
+
+        // 1. Get Blood Group Distribution for the Pie Chart
+        const bloodDist = await userCollection.aggregate([
+          { $group: { _id: "$bloodGroup", value: { $sum: 1 } } },
+          { $project: { name: "$_id", value: 1, _id: 0 } }
+        ]).toArray();
+
+        // 2. Get Top 5 Donors (assuming users have a 'donationCount' field)
+        const topDonors = await userCollection.find({})
+          .sort({ donationCount: -1 }) // Make sure you increment this when a mission is 'done'
+          .limit(5)
+          .toArray();
+
+        res.send({
+          totalMissions,
+          activeMissions,
+          totalUsers,
+          bloodDist: bloodDist.filter(item => item.name), // Remove nulls
+          topDonors,
+          timestamp: new Date().toLocaleTimeString()
+        });
+      } catch (error) {
+        res.status(500).send({ message: "STATS_SYNC_ERROR" });
+      }
+    });
+
+
+    app.patch("/donation-status/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const { status, donorEmail } = req.body; // Pass the donor's email from frontend
+
+      const filter = { _id: new ObjectId(id) };
+      const updateDoc = { $set: { status: status } };
+
+      const result = await donationCollection.updateOne(filter, updateDoc);
+
+      // CRITICAL: If the mission is marked as 'done', reward the donor!
+      if (status === 'done' && donorEmail) {
+        await userCollection.updateOne(
+          { email: donorEmail },
+          { $inc: { donationCount: 1 } } // Increment their count by 1
+        );
+      }
+
+      res.send(result);
+    });
 
     app.get("/admin-stats", verifyToken, verifyAdmin, async (req, res) => {
       const totalUsers = await userCollection.countDocuments();
@@ -432,6 +509,40 @@ async function run() {
     });
 
 
+    // 📊 Inventory / Supply Vault: Aggregating blood stock from donationRequests
+    app.get('/blood-stock', async (req, res) => {
+      try {
+        // 1. Count 'done' requests grouped by bloodGroup
+        const stock = await donationCollection.aggregate([
+          { $match: { status: "inprogress" } }, // Only count completed donations
+          {
+            $group: {
+              _id: "$bloodGroup", // This matches your "O+" field
+              units: { $sum: 1 }
+            }
+          }
+        ]).toArray();
+
+        // 2. Define all groups to ensure 8 cards always show
+        const allGroups = ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'];
+
+        // 3. Map through allGroups and find the count from 'stock'
+        const formattedStock = allGroups.map(groupName => {
+          // Find if this group exists in our database count
+          const found = stock.find(item => item._id === groupName);
+
+          return {
+            group: groupName,
+            units: found ? found.units : 0 // If not found, units are 0
+          };
+        });
+
+        res.send(formattedStock);
+      } catch (error) {
+        res.status(500).send({ message: "VAULT_SYNC_ERROR", error });
+      }
+    });
+
     // server/index.js
 
     app.get('/admin-stats', verifyToken, verifyAdmin, async (req, res) => {
@@ -458,7 +569,7 @@ async function run() {
       });
     });
 
-    await client.db("admin").command({ ping: 1 });
+    // await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
 
